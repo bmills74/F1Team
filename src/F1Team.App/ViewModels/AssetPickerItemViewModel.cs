@@ -1,3 +1,4 @@
+using System.Globalization;
 using F1Team.Core.Models;
 
 namespace F1Team.App.ViewModels;
@@ -23,6 +24,13 @@ public sealed class AssetPickerItemViewModel : ObservableObject
 
     public string Name => Asset.Name;
 
+    /// <summary>
+    /// The abbreviation shown as a muted subtitle only when it differs from the display name,
+    /// so imported data (where name == abbreviation) does not repeat the same text twice.
+    /// </summary>
+    public string SubtitleAbbreviation =>
+        string.Equals(Name, Abbreviation, StringComparison.OrdinalIgnoreCase) ? string.Empty : Abbreviation;
+
     public FantasyAssetType Type => Asset.Type;
 
     public decimal Price => Asset.Price;
@@ -32,6 +40,86 @@ public sealed class AssetPickerItemViewModel : ObservableObject
     public decimal ExpectedBudgetChange => Asset.ExpectedBudgetChange;
 
     public decimal PointsPerMillion => Price == 0m ? 0m : decimal.Round(ExpectedPoints / Price, 2);
+
+    public bool HasDetails =>
+        Asset.PriorRacePoints is not null ||
+        Asset.PriorPriorRacePoints is not null ||
+        Asset.RequiredPoints is not null ||
+        Asset.PriceChangeOdds is not null;
+
+    /// <summary>Recent form: points scored in the last two races, when available.</summary>
+    public string RecentFormLine
+    {
+        get
+        {
+            var parts = new List<string>();
+            if (Asset.PriorRacePoints is { } last)
+            {
+                parts.Add($"last race {last:0.#}");
+            }
+
+            if (Asset.PriorPriorRacePoints is { } beforeLast)
+            {
+                parts.Add($"race before {beforeLast:0.#}");
+            }
+
+            return parts.Count == 0 ? string.Empty : string.Join("   ·   ", parts);
+        }
+    }
+
+    /// <summary>Points needed to rise a price tier (Good/Great).</summary>
+    public string RequiredToRiseLine => FormatRequired("Rise", PriceChangeLevel.Good, PriceChangeLevel.Great);
+
+    /// <summary>Points below which the price falls a tier (Poor/Terrible).</summary>
+    public string RequiredToFallLine => FormatRequired("Fall risk below", PriceChangeLevel.Poor, PriceChangeLevel.Terrible);
+
+    /// <summary>Simulation odds of each price-change level.</summary>
+    public string PriceOddsLine
+    {
+        get
+        {
+            var odds = Asset.PriceChangeOdds;
+            if (odds is null)
+            {
+                return string.Empty;
+            }
+
+            var parts = new List<string>();
+            AppendOdds(parts, "Great", odds.Great);
+            AppendOdds(parts, "Good", odds.Good);
+            AppendOdds(parts, "Poor", odds.Poor);
+            AppendOdds(parts, "Terrible", odds.Terrible);
+            return parts.Count == 0 ? string.Empty : string.Join("   ", parts);
+        }
+    }
+
+    private string FormatRequired(string label, params PriceChangeLevel[] levels)
+    {
+        var required = Asset.RequiredPoints;
+        if (required is null)
+        {
+            return string.Empty;
+        }
+
+        var parts = new List<string>();
+        foreach (var level in levels)
+        {
+            if (required.ForLevel(level) is { } points)
+            {
+                parts.Add($"{level} {points:0.#}");
+            }
+        }
+
+        return parts.Count == 0 ? string.Empty : $"{label}: {string.Join("   ·   ", parts)}";
+    }
+
+    private static void AppendOdds(List<string> parts, string label, decimal? probability)
+    {
+        if (probability is { } value)
+        {
+            parts.Add($"{label} {value.ToString("0.#", CultureInfo.InvariantCulture)}%");
+        }
+    }
 
     public bool IsSelectedByUser
     {

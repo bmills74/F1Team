@@ -25,6 +25,7 @@ public sealed class MainWindowViewModel : ObservableObject
     private TeamProjection _rivalProjection;
     private TeamProjection _candidateProjection;
     private string _rivalName = "Rival";
+    private string _assetSearchText = string.Empty;
     private int _selectedComparisonTabIndex;
     private string _dataStatus = "Using sample data. Refresh to import F1FantasyTools data.";
     private string _raceTitle = "Sample Data";
@@ -234,6 +235,18 @@ public sealed class MainWindowViewModel : ObservableObject
         }
     }
 
+    public string AssetSearchText
+    {
+        get => _assetSearchText;
+        set
+        {
+            if (SetProperty(ref _assetSearchText, value))
+            {
+                AssetPickerView.Refresh();
+            }
+        }
+    }
+
     public int SelectedComparisonTabIndex
     {
         get => _selectedComparisonTabIndex;
@@ -241,8 +254,34 @@ public sealed class MainWindowViewModel : ObservableObject
         {
             if (SetProperty(ref _selectedComparisonTabIndex, value))
             {
+                OnPropertyChanged(nameof(CompareVsRival));
+                OnPropertyChanged(nameof(CompareVsCandidate));
                 OnComparisonChanged();
                 QueueSaveSettings();
+            }
+        }
+    }
+
+    public bool CompareVsRival
+    {
+        get => SelectedComparisonTabIndex == 0;
+        set
+        {
+            if (value)
+            {
+                SelectedComparisonTabIndex = 0;
+            }
+        }
+    }
+
+    public bool CompareVsCandidate
+    {
+        get => SelectedComparisonTabIndex == 1;
+        set
+        {
+            if (value)
+            {
+                SelectedComparisonTabIndex = 1;
             }
         }
     }
@@ -304,6 +343,44 @@ public sealed class MainWindowViewModel : ObservableObject
         private set => SetProperty(ref _candidateProjection, value);
     }
 
+    public string TeamStatusText
+    {
+        get
+        {
+            var emptyDrivers = TeamProjection.RequiredDriverCount - UserProjection.DriverCount;
+            var emptyConstructors = TeamProjection.RequiredConstructorCount - UserProjection.ConstructorCount;
+            var emptySlots = emptyDrivers + emptyConstructors;
+
+            if (emptySlots > 0)
+            {
+                return $"{emptySlots} slot{(emptySlots == 1 ? "" : "s")} to fill";
+            }
+
+            if (UserProjection.IsOverBudget)
+            {
+                return $"{Math.Abs(UserProjection.RemainingBudget):0.0}m over budget";
+            }
+
+            return "Team ready";
+        }
+    }
+
+    public string TeamStatusColor
+    {
+        get
+        {
+            var isComplete = UserProjection.IsComplete;
+            if (!isComplete)
+            {
+                return "#8a6d1b"; // amber: still building
+            }
+
+            return UserProjection.IsOverBudget ? "#b42318" : "#1b7f3a";
+        }
+    }
+
+    public string RefreshButtonText => IsRefreshing ? "Refreshing..." : "Refresh Data";
+
     public TeamProjection ComparisonProjection => SelectedComparisonTabIndex == 1 ? CandidateProjection : RivalProjection;
 
     public string ComparisonTeamTitle => SelectedComparisonTabIndex == 1 ? "Candidate" : RivalName;
@@ -345,9 +422,13 @@ public sealed class MainWindowViewModel : ObservableObject
         get => _isRefreshing;
         private set
         {
-            if (SetProperty(ref _isRefreshing, value) && RefreshDataCommand is AsyncCommand command)
+            if (SetProperty(ref _isRefreshing, value))
             {
-                command.RaiseCanExecuteChanged();
+                OnPropertyChanged(nameof(RefreshButtonText));
+                if (RefreshDataCommand is AsyncCommand command)
+                {
+                    command.RaiseCanExecuteChanged();
+                }
             }
         }
     }
@@ -386,7 +467,7 @@ public sealed class MainWindowViewModel : ObservableObject
         {
             if (ActiveSlot is null)
             {
-                return "Choose a slot";
+                return "Pick a slot on the left, then choose an asset below";
             }
 
             var teamName = ActiveSlot.TeamKey switch
@@ -395,7 +476,7 @@ public sealed class MainWindowViewModel : ObservableObject
                 AssetSlotViewModel.CandidateTeamKey => "Candidate Team",
                 _ => "My Team"
             };
-            return $"{teamName}: {ActiveSlot.Label}";
+            return $"Picking: {teamName} · {ActiveSlot.Label}";
         }
     }
 
@@ -421,6 +502,8 @@ public sealed class MainWindowViewModel : ObservableObject
         RefreshX2SlotMarkers();
         SyncRemainingBudgetTextFromProjections();
         OnComparisonChanged();
+        OnPropertyChanged(nameof(TeamStatusText));
+        OnPropertyChanged(nameof(TeamStatusColor));
         OnPropertyChanged(nameof(ActivePickerTitle));
         OnPropertyChanged(nameof(UserSelectedDrivers));
         OnPropertyChanged(nameof(RivalSelectedDrivers));
@@ -800,8 +883,24 @@ public sealed class MainWindowViewModel : ObservableObject
 
     private bool FilterAssetPicker(object item)
     {
-        return item is AssetPickerItemViewModel asset &&
-               (ActiveSlot is null || asset.Type == ActiveSlot.AssetType);
+        if (item is not AssetPickerItemViewModel asset)
+        {
+            return false;
+        }
+
+        if (ActiveSlot is not null && asset.Type != ActiveSlot.AssetType)
+        {
+            return false;
+        }
+
+        var search = _assetSearchText?.Trim();
+        if (string.IsNullOrEmpty(search))
+        {
+            return true;
+        }
+
+        return asset.Name.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+               asset.Abbreviation.Contains(search, StringComparison.OrdinalIgnoreCase);
     }
 
     private IEnumerable<AssetSlotViewModel> GetSlotsForTeam(string teamKey)
@@ -1115,11 +1214,51 @@ public sealed class MainWindowViewModel : ObservableObject
 
     private static FantasyAsset Driver(string abbreviation, string name, decimal price, decimal points, decimal budgetChange)
     {
-        return new FantasyAsset(abbreviation, abbreviation, FantasyAssetType.Driver, price, points, budgetChange, name);
+        return CreateSampleAsset(abbreviation, name, FantasyAssetType.Driver, price, points, budgetChange);
     }
 
     private static FantasyAsset Constructor(string abbreviation, string name, decimal price, decimal points, decimal budgetChange)
     {
-        return new FantasyAsset(abbreviation, abbreviation, FantasyAssetType.Constructor, price, points, budgetChange, name);
+        return CreateSampleAsset(abbreviation, name, FantasyAssetType.Constructor, price, points, budgetChange);
+    }
+
+    // Sample data has no live detail feed, so derive plausible form / required-points / odds
+    // values from the headline numbers to exercise the new asset detail tooltip.
+    private static FantasyAsset CreateSampleAsset(
+        string abbreviation,
+        string name,
+        FantasyAssetType type,
+        decimal price,
+        decimal points,
+        decimal budgetChange)
+    {
+        var priorRace = decimal.Round(points * 0.9m, 1);
+        var priorPrior = decimal.Round(points * 1.05m, 1);
+        var required = new RequiredPoints(
+            Terrible: decimal.Round(points * 0.3m, 1),
+            Poor: decimal.Round(points * 0.6m, 1),
+            Good: decimal.Round(points * 1.15m, 1),
+            Great: decimal.Round(points * 1.5m, 1));
+
+        // Higher expected budget change skews the odds towards a price rise.
+        var riseBias = Math.Clamp(50m + budgetChange * 80m, 5m, 95m);
+        var odds = new PriceChangeOdds(
+            Terrible: decimal.Round((100m - riseBias) * 0.35m, 0),
+            Poor: decimal.Round((100m - riseBias) * 0.65m, 0),
+            Good: decimal.Round(riseBias * 0.6m, 0),
+            Great: decimal.Round(riseBias * 0.4m, 0));
+
+        return new FantasyAsset(
+            abbreviation,
+            abbreviation,
+            type,
+            price,
+            points,
+            budgetChange,
+            name,
+            PriorRacePoints: priorRace,
+            PriorPriorRacePoints: priorPrior,
+            RequiredPoints: required,
+            PriceChangeOdds: odds);
     }
 }

@@ -14,6 +14,9 @@
         Background="#f4f6f8"
         d:DataContext="{d:DesignInstance Type=vm:MainWindowViewModel}">
     <Window.Resources>
+        <vm:EmptyStringToCollapsedConverter x:Key="EmptyToCollapsed" />
+        <vm:FalseToVisibleConverter x:Key="FalseToVisible" />
+
         <Style x:Key="PanelBorder" TargetType="Border">
             <Setter Property="Background" Value="White" />
             <Setter Property="BorderBrush" Value="#d9dee7" />
@@ -38,6 +41,43 @@
             <Setter Property="Foreground" Value="#152033" />
             <Setter Property="FontSize" Value="22" />
             <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+
+        <Style x:Key="SearchBox" TargetType="TextBox">
+            <Setter Property="MinHeight" Value="30" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Padding" Value="6,0" />
+            <Setter Property="Background" Value="White" />
+            <Setter Property="BorderBrush" Value="#c8d0dc" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4">
+                            <Grid>
+                                <ScrollViewer x:Name="PART_ContentHost"
+                                              Margin="{TemplateBinding Padding}"
+                                              VerticalAlignment="Center" />
+                                <TextBlock x:Name="Watermark"
+                                           Text="{TemplateBinding Tag}"
+                                           Margin="8,0,0,0"
+                                           VerticalAlignment="Center"
+                                           Foreground="#9aa5b5"
+                                           IsHitTestVisible="False"
+                                           Visibility="Collapsed" />
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="Text" Value="">
+                                <Setter TargetName="Watermark" Property="Visibility" Value="Visible" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
 
         <Style x:Key="CompactButton" TargetType="Button">
@@ -151,7 +191,16 @@
 
         <DockPanel Grid.Row="0" Margin="0,0,0,16">
             <StackPanel DockPanel.Dock="Left">
-                <TextBlock Text="F1 Fantasy Team Calculator" FontSize="28" FontWeight="Bold" Foreground="#101828" />
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="F1 Fantasy Team Calculator" FontSize="28" FontWeight="Bold" Foreground="#101828" />
+                    <Border VerticalAlignment="Center"
+                            Margin="14,6,0,0"
+                            CornerRadius="10"
+                            Padding="10,3"
+                            Background="{Binding TeamStatusColor}">
+                        <TextBlock Text="{Binding TeamStatusText}" Foreground="White" FontWeight="SemiBold" FontSize="12" />
+                    </Border>
+                </StackPanel>
                 <TextBlock Text="{Binding UpcomingRaceDetails}" Foreground="#152033" FontWeight="SemiBold" Margin="0,4,0,2" />
                 <StackPanel Orientation="Horizontal">
                     <TextBlock Text="{Binding RaceTitle}" Foreground="#617086" FontWeight="SemiBold" />
@@ -160,7 +209,7 @@
                 </StackPanel>
             </StackPanel>
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                <Button Content="Refresh Data"
+                <Button Content="{Binding RefreshButtonText}"
                         Command="{Binding RefreshDataCommand}"
                         MinHeight="32"
                         Padding="14,0"
@@ -174,67 +223,82 @@
             </StackPanel>
         </DockPanel>
 
-        <Grid Grid.Row="1" Margin="0,0,0,16">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
+        <StackPanel Grid.Row="1" Margin="0,0,0,16">
+            <StackPanel Orientation="Horizontal" Margin="2,0,0,10">
+                <TextBlock Text="Comparing against:" VerticalAlignment="Center" Foreground="#617086" Margin="0,0,10,0" />
+                <RadioButton Content="{Binding RivalName}"
+                             IsChecked="{Binding CompareVsRival, Mode=TwoWay}"
+                             GroupName="CompareTarget"
+                             VerticalContentAlignment="Center"
+                             Margin="0,0,14,0" />
+                <RadioButton Content="Candidate"
+                             IsChecked="{Binding CompareVsCandidate, Mode=TwoWay}"
+                             GroupName="CompareTarget"
+                             VerticalContentAlignment="Center" />
+            </StackPanel>
 
-            <Border Grid.Column="0" Style="{StaticResource PanelBorder}" Margin="0,0,12,0">
-                <StackPanel>
-                    <TextBlock Text="Team Cost" Style="{StaticResource MetricLabel}" />
-                    <TextBlock Text="{Binding UserProjection.TotalCost, StringFormat=My {0:0.0}m}" Style="{StaticResource MetricValue}" />
-                    <TextBlock Foreground="#617086">
-                        <Run Text="vs " />
-                        <Run Text="{Binding ComparisonTeamTitle, Mode=OneWay}" />
-                        <Run Text=" " />
-                        <Run Text="{Binding ComparisonProjection.TotalCost, StringFormat={}{0:0.0}m, Mode=OneWay}" />
-                    </TextBlock>
-                    <TextBlock Text="{Binding TeamCostDifference, StringFormat=Gap {0:+0.0;-0.0;0.0}m}" Foreground="#617086" />
-                </StackPanel>
-            </Border>
-            <Border Grid.Column="1" Style="{StaticResource PanelBorder}" Margin="0,0,12,0">
-                <StackPanel>
-                    <TextBlock Text="My Remaining" Style="{StaticResource MetricLabel}" />
-                    <TextBlock Text="{Binding UserProjection.RemainingBudget, StringFormat=My {0:0.0}m}" Style="{StaticResource BudgetRemainingText}" />
-                    <TextBlock Foreground="#617086">
-                        <Run Text="vs " />
-                        <Run Text="{Binding ComparisonTeamTitle, Mode=OneWay}" />
-                        <Run Text=" " />
-                        <Run Text="{Binding ComparisonProjection.RemainingBudget, StringFormat={}{0:0.0}m, Mode=OneWay}" />
-                    </TextBlock>
-                    <TextBlock Text="{Binding RemainingBudgetDifference, StringFormat=Gap {0:+0.0;-0.0;0.0}m}" Foreground="#617086" />
-                </StackPanel>
-            </Border>
-            <Border Grid.Column="2" Style="{StaticResource PanelBorder}" Margin="0,0,12,0">
-                <StackPanel>
-                    <TextBlock Text="Expected Points" Style="{StaticResource MetricLabel}" />
-                    <TextBlock Text="{Binding UserProjection.ExpectedPoints, StringFormat=My {0:0.0}}" Style="{StaticResource MetricValue}" />
-                    <TextBlock Foreground="#617086">
-                        <Run Text="vs " />
-                        <Run Text="{Binding ComparisonTeamTitle, Mode=OneWay}" />
-                        <Run Text=" " />
-                        <Run Text="{Binding ComparisonProjection.ExpectedPoints, StringFormat={}{0:0.0}, Mode=OneWay}" />
-                    </TextBlock>
-                    <TextBlock Text="{Binding ExpectedPointsDifference, StringFormat=Gap {0:+0.0;-0.0;0.0}}" Foreground="#617086" />
-                </StackPanel>
-            </Border>
-            <Border Grid.Column="3" Style="{StaticResource PanelBorder}">
-                <StackPanel>
-                    <TextBlock Text="Expected Budget Change" Style="{StaticResource MetricLabel}" />
-                    <TextBlock Text="{Binding UserProjection.ExpectedBudgetChange, StringFormat=My {0:+0.0;-0.0;0.0}m}" Style="{StaticResource MetricValue}" />
-                    <TextBlock Foreground="#617086">
-                        <Run Text="vs " />
-                        <Run Text="{Binding ComparisonTeamTitle, Mode=OneWay}" />
-                        <Run Text=" " />
-                        <Run Text="{Binding ComparisonProjection.ExpectedBudgetChange, StringFormat={}{0:+0.0;-0.0;0.0}m, Mode=OneWay}" />
-                    </TextBlock>
-                    <TextBlock Text="{Binding ExpectedBudgetChangeDifference, StringFormat=Gap {0:+0.0;-0.0;0.0}m}" Foreground="#617086" />
-                </StackPanel>
-            </Border>
-        </Grid>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <Border Grid.Column="0" Style="{StaticResource PanelBorder}" Margin="0,0,12,0">
+                    <StackPanel>
+                        <TextBlock Text="Team Cost" Style="{StaticResource MetricLabel}" />
+                        <TextBlock Text="{Binding UserProjection.TotalCost, StringFormat={}{0:0.0}m}" Style="{StaticResource MetricValue}" />
+                        <TextBlock Foreground="#617086">
+                            <Run Text="vs " />
+                            <Run Text="{Binding ComparisonTeamTitle, Mode=OneWay}" />
+                            <Run Text=" " />
+                            <Run Text="{Binding ComparisonProjection.TotalCost, StringFormat={}{0:0.0}m, Mode=OneWay}" />
+                        </TextBlock>
+                        <TextBlock Text="{Binding TeamCostDifference, StringFormat=Gap {0:+0.0;-0.0;0.0}m}" Foreground="#617086" />
+                    </StackPanel>
+                </Border>
+                <Border Grid.Column="1" Style="{StaticResource PanelBorder}" Margin="0,0,12,0">
+                    <StackPanel>
+                        <TextBlock Text="Remaining Budget" Style="{StaticResource MetricLabel}" />
+                        <TextBlock Text="{Binding UserProjection.RemainingBudget, StringFormat={}{0:0.0}m}" Style="{StaticResource BudgetRemainingText}" />
+                        <TextBlock Foreground="#617086">
+                            <Run Text="vs " />
+                            <Run Text="{Binding ComparisonTeamTitle, Mode=OneWay}" />
+                            <Run Text=" " />
+                            <Run Text="{Binding ComparisonProjection.RemainingBudget, StringFormat={}{0:0.0}m, Mode=OneWay}" />
+                        </TextBlock>
+                        <TextBlock Text="{Binding RemainingBudgetDifference, StringFormat=Gap {0:+0.0;-0.0;0.0}m}" Foreground="#617086" />
+                    </StackPanel>
+                </Border>
+                <Border Grid.Column="2" Style="{StaticResource PanelBorder}" Margin="0,0,12,0">
+                    <StackPanel>
+                        <TextBlock Text="Expected Points" Style="{StaticResource MetricLabel}" />
+                        <TextBlock Text="{Binding UserProjection.ExpectedPoints, StringFormat={}{0:0.0}}" Style="{StaticResource MetricValue}" />
+                        <TextBlock Foreground="#617086">
+                            <Run Text="vs " />
+                            <Run Text="{Binding ComparisonTeamTitle, Mode=OneWay}" />
+                            <Run Text=" " />
+                            <Run Text="{Binding ComparisonProjection.ExpectedPoints, StringFormat={}{0:0.0}, Mode=OneWay}" />
+                        </TextBlock>
+                        <TextBlock Text="{Binding ExpectedPointsDifference, StringFormat=Gap {0:+0.0;-0.0;0.0}}" Foreground="#617086" />
+                    </StackPanel>
+                </Border>
+                <Border Grid.Column="3" Style="{StaticResource PanelBorder}">
+                    <StackPanel>
+                        <TextBlock Text="Expected Budget Change" Style="{StaticResource MetricLabel}" />
+                        <TextBlock Text="{Binding UserProjection.ExpectedBudgetChange, StringFormat={}{0:+0.0;-0.0;0.0}m}" Style="{StaticResource MetricValue}" />
+                        <TextBlock Foreground="#617086">
+                            <Run Text="vs " />
+                            <Run Text="{Binding ComparisonTeamTitle, Mode=OneWay}" />
+                            <Run Text=" " />
+                            <Run Text="{Binding ComparisonProjection.ExpectedBudgetChange, StringFormat={}{0:+0.0;-0.0;0.0}m, Mode=OneWay}" />
+                        </TextBlock>
+                        <TextBlock Text="{Binding ExpectedBudgetChangeDifference, StringFormat=Gap {0:+0.0;-0.0;0.0}m}" Foreground="#617086" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </StackPanel>
 
         <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
@@ -260,7 +324,8 @@
                                     <ColumnDefinition Width="62" />
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Row="0" Grid.Column="0" Text="x2 driver" Foreground="#617086" Margin="0,0,0,4" />
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="x2 driver" Foreground="#617086" Margin="0,0,0,4"
+                                           ToolTip="Your x2 (captain) driver scores double points. The extra points are added to the team's Expected Points total." />
                                 <TextBlock Grid.Row="0" Grid.Column="1" Text="Remaining budget" Foreground="#617086" Margin="0,0,0,4" />
                                 <TextBlock Grid.Row="0" Grid.Column="3" Text="Actual budget" Foreground="#617086" Margin="12,0,0,4" />
                                 <ComboBox Grid.Row="1" Grid.Column="0"
@@ -269,13 +334,19 @@
                                           DisplayMemberPath="Name"
                                           MinHeight="30"
                                           VerticalContentAlignment="Center"
+                                          ToolTip="Your x2 (captain) driver scores double points."
                                           Margin="0,0,10,0" />
                                 <DockPanel Grid.Row="1" Grid.Column="1" Margin="0,0,8,0">
                                     <TextBlock DockPanel.Dock="Right" Text="m" Foreground="#617086" VerticalAlignment="Center" Margin="4,0,0,0" />
                                     <TextBox Text="{Binding MyRemainingBudgetText, UpdateSourceTrigger=PropertyChanged}"
                                              MinHeight="30"
                                              VerticalContentAlignment="Center"
-                                             HorizontalContentAlignment="Right" />
+                                             HorizontalContentAlignment="Right"
+                                             ToolTip="Enter your remaining budget and press Enter (or Set).">
+                                        <TextBox.InputBindings>
+                                            <KeyBinding Key="Return" Command="{Binding SetMyBudgetCommand}" />
+                                        </TextBox.InputBindings>
+                                    </TextBox>
                                 </DockPanel>
                                 <Button Grid.Row="1" Grid.Column="2" Content="Set" Command="{Binding SetMyBudgetCommand}" Style="{StaticResource CompactButton}" Margin="0" />
                                 <TextBlock Grid.Row="1" Grid.Column="3"
@@ -316,9 +387,24 @@
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
                     <StackPanel>
-                        <TextBlock Text="Available Assets" Style="{StaticResource SectionTitle}" Margin="0,0,0,4" />
-                        <TextBlock Text="{Binding ActivePickerTitle}" Foreground="#617086" Margin="0,0,0,10" />
+                        <TextBlock Text="Available Assets" Style="{StaticResource SectionTitle}" Margin="0,0,0,8" />
+                        <Border CornerRadius="6"
+                                Padding="10,6"
+                                Margin="0,0,0,10"
+                                Background="#eef3ff"
+                                BorderBrush="#c9d8ff"
+                                BorderThickness="1">
+                            <TextBlock Text="{Binding ActivePickerTitle}"
+                                       Foreground="#1c3fbf"
+                                       FontWeight="SemiBold" />
+                        </Border>
+                        <TextBox x:Name="AssetSearchBox"
+                                 Style="{StaticResource SearchBox}"
+                                 Text="{Binding AssetSearchText, UpdateSourceTrigger=PropertyChanged}"
+                                 Margin="0,0,0,10"
+                                 Tag="Search by name or code..." />
                         <WrapPanel Margin="0,0,0,10">
+                            <TextBlock Text="Sort:" VerticalAlignment="Center" Foreground="#617086" Margin="0,0,8,6" />
                             <Button Content="Best points" Command="{Binding QuickSortCommand}" CommandParameter="ExpectedPoints" Padding="10,4" Margin="0,0,6,6" />
                             <Button Content="Best value" Command="{Binding QuickSortCommand}" CommandParameter="PointsPerMillion" Padding="10,4" Margin="0,0,6,6" />
                             <Button Content="Cheapest" Command="{Binding QuickSortCommand}" CommandParameter="Price" Padding="10,4" Margin="0,0,6,6" />
@@ -338,7 +424,24 @@
                               AlternatingRowBackground="#f7f9fc">
                         <DataGrid.RowStyle>
                             <Style TargetType="DataGridRow">
-                                <Setter Property="ToolTip" Value="Click Select to assign this asset to the active slot." />
+                                <Setter Property="ToolTip">
+                                    <Setter.Value>
+                                        <StackPanel MaxWidth="320">
+                                            <TextBlock Text="{Binding Name, Mode=OneWay}" FontWeight="Bold" FontSize="13" Foreground="#152033" />
+                                            <TextBlock Text="{Binding RecentFormLine}" Foreground="#152033" Margin="0,6,0,0"
+                                                       Visibility="{Binding RecentFormLine, Converter={StaticResource EmptyToCollapsed}}" />
+                                            <TextBlock Text="{Binding RequiredToRiseLine}" Foreground="#1b7f3a" Margin="0,4,0,0"
+                                                       Visibility="{Binding RequiredToRiseLine, Converter={StaticResource EmptyToCollapsed}}" />
+                                            <TextBlock Text="{Binding RequiredToFallLine}" Foreground="#b42318" Margin="0,2,0,0"
+                                                       Visibility="{Binding RequiredToFallLine, Converter={StaticResource EmptyToCollapsed}}" />
+                                            <TextBlock Text="{Binding PriceOddsLine}" Foreground="#617086" Margin="0,4,0,0"
+                                                       Visibility="{Binding PriceOddsLine, Converter={StaticResource EmptyToCollapsed}}" />
+                                            <TextBlock Text="No detail data available." Foreground="#8a96a8" FontStyle="Italic"
+                                                       Visibility="{Binding HasDetails, Converter={StaticResource FalseToVisible}}" />
+                                            <TextBlock Text="Double-click to assign to the active slot." Foreground="#8a96a8" FontStyle="Italic" Margin="0,8,0,0" />
+                                        </StackPanel>
+                                    </Setter.Value>
+                                </Setter>
                                 <Style.Triggers>
                                     <DataTrigger Binding="{Binding IsSelectable}" Value="False">
                                         <Setter Property="Opacity" Value="0.55" />
@@ -361,23 +464,27 @@
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTextColumn Header="Asset" Binding="{Binding Abbreviation}" Width="62" />
-                            <DataGridTextColumn Header="Name" Binding="{Binding Name}" Width="*" />
-                            <DataGridTextColumn Header="$" Binding="{Binding Price, StringFormat={}{0:0.0}}" Width="52" SortMemberPath="Price" />
-                            <DataGridTextColumn Header="Pts" Binding="{Binding ExpectedPoints, StringFormat={}{0:0.0}}" Width="56" SortMemberPath="ExpectedPoints" />
-                            <DataGridTextColumn Header="PPM" Binding="{Binding PointsPerMillion, StringFormat={}{0:0.00}}" Width="56" SortMemberPath="PointsPerMillion" />
-                            <DataGridTextColumn Header="Value" Binding="{Binding ExpectedBudgetChange, StringFormat={}{0:+0.0;-0.0;0.0}}" Width="64" SortMemberPath="ExpectedBudgetChange">
+                            <DataGridTemplateColumn Header="Name" Width="*" MinWidth="96" SortMemberPath="Name">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" Foreground="#152033" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Text="{Binding SubtitleAbbreviation}"
+                                                       Foreground="#8a96a8"
+                                                       Margin="6,0,0,0"
+                                                       VerticalAlignment="Center"
+                                                       FontSize="11" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTextColumn Header="Price" Binding="{Binding Price, StringFormat={}{0:0.0}m}" Width="56" SortMemberPath="Price" />
+                            <DataGridTextColumn Header="Pts" Binding="{Binding ExpectedPoints, StringFormat={}{0:0.0}}" Width="48" SortMemberPath="ExpectedPoints" />
+                            <DataGridTextColumn Header="Pts/$m" Binding="{Binding PointsPerMillion, StringFormat={}{0:0.00}}" Width="54" SortMemberPath="PointsPerMillion" />
+                            <DataGridTextColumn Header="Δ Price" Binding="{Binding ExpectedBudgetChange, StringFormat={}{0:+0.0;-0.0;0.0}m}" Width="62" SortMemberPath="ExpectedBudgetChange">
                                 <DataGridTextColumn.ElementStyle>
                                     <Style TargetType="TextBlock">
                                         <Setter Property="Foreground" Value="{Binding BudgetChangeColor}" />
-                                    </Style>
-                                </DataGridTextColumn.ElementStyle>
-                            </DataGridTextColumn>
-                            <DataGridTextColumn Header="Afford" Binding="{Binding AffordabilityText}" Width="58">
-                                <DataGridTextColumn.ElementStyle>
-                                    <Style TargetType="TextBlock">
-                                        <Setter Property="Foreground" Value="{Binding AffordabilityColor}" />
-                                        <Setter Property="FontWeight" Value="SemiBold" />
                                     </Style>
                                 </DataGridTextColumn.ElementStyle>
                             </DataGridTextColumn>
@@ -419,7 +526,11 @@
                                             <TextBox Text="{Binding RivalRemainingBudgetText, UpdateSourceTrigger=PropertyChanged}"
                                                      MinHeight="30"
                                                      VerticalContentAlignment="Center"
-                                                     HorizontalContentAlignment="Right" />
+                                                     HorizontalContentAlignment="Right">
+                                                <TextBox.InputBindings>
+                                                    <KeyBinding Key="Return" Command="{Binding SetRivalBudgetCommand}" />
+                                                </TextBox.InputBindings>
+                                            </TextBox>
                                         </DockPanel>
                                         <Button Grid.Row="1" Grid.Column="2" Content="Set" Command="{Binding SetRivalBudgetCommand}" Style="{StaticResource CompactButton}" Margin="0" />
                                     </Grid>
@@ -467,7 +578,11 @@
                                             <TextBox Text="{Binding CandidateRemainingBudgetText, UpdateSourceTrigger=PropertyChanged}"
                                                      MinHeight="30"
                                                      VerticalContentAlignment="Center"
-                                                     HorizontalContentAlignment="Right" />
+                                                     HorizontalContentAlignment="Right">
+                                                <TextBox.InputBindings>
+                                                    <KeyBinding Key="Return" Command="{Binding SetCandidateBudgetCommand}" />
+                                                </TextBox.InputBindings>
+                                            </TextBox>
                                         </DockPanel>
                                         <Button Grid.Row="1" Grid.Column="2" Content="Set" Command="{Binding SetCandidateBudgetCommand}" Style="{StaticResource CompactButton}" Margin="0" />
                                     </Grid>
