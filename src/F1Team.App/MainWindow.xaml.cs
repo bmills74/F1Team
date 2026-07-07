@@ -13,11 +13,11 @@ namespace F1Team.App
             DataContext = new MainWindowViewModel();
         }
 
-        private void AssetGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+        private void AssetRow_Click(object sender, MouseButtonEventArgs e)
         {
             if (DataContext is not MainWindowViewModel viewModel ||
-                sender is not DataGrid dataGrid ||
-                dataGrid.SelectedItem is not AssetPickerItemViewModel item ||
+                sender is not DataGridRow row ||
+                row.DataContext is not AssetPickerItemViewModel item ||
                 !viewModel.SelectAssetCommand.CanExecute(item))
             {
                 return;

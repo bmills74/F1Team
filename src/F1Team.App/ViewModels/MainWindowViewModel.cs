@@ -48,6 +48,8 @@ public sealed class MainWindowViewModel : ObservableObject
         AssetPickerView.Filter = FilterAssetPicker;
         SortAssetPicker("ExpectedPoints");
 
+        ComparisonRows = new ObservableCollection<ComparisonRow>();
+
         UserDriverSlots = CreateSlots("Driver", FantasyAssetType.Driver, 5, AssetSlotViewModel.UserTeamKey);
         UserConstructorSlots = CreateSlots("Constructor", FantasyAssetType.Constructor, 2, AssetSlotViewModel.UserTeamKey);
         RivalDriverSlots = CreateSlots("Driver", FantasyAssetType.Driver, 5, AssetSlotViewModel.RivalTeamKey);
@@ -104,6 +106,8 @@ public sealed class MainWindowViewModel : ObservableObject
     public ObservableCollection<AssetSlotViewModel> CandidateDriverSlots { get; }
 
     public ObservableCollection<AssetSlotViewModel> CandidateConstructorSlots { get; }
+
+    public ObservableCollection<ComparisonRow> ComparisonRows { get; }
 
     public IReadOnlyList<FantasyAsset> UserSelectedDrivers => UserDriverSlots
         .Select(slot => slot.SelectedAsset)
@@ -504,12 +508,57 @@ public sealed class MainWindowViewModel : ObservableObject
         OnComparisonChanged();
         OnPropertyChanged(nameof(TeamStatusText));
         OnPropertyChanged(nameof(TeamStatusColor));
+        RebuildComparisonRows();
         OnPropertyChanged(nameof(ActivePickerTitle));
         OnPropertyChanged(nameof(UserSelectedDrivers));
         OnPropertyChanged(nameof(RivalSelectedDrivers));
         OnPropertyChanged(nameof(CandidateSelectedDrivers));
         RefreshAssetPickerState();
     }
+
+    private const string NeutralColor = "#152033";
+    private const string PositiveColor = "#1b7f3a";
+    private const string NegativeColor = "#b42318";
+
+    private void RebuildComparisonRows()
+    {
+        if (ComparisonRows is null)
+        {
+            return;
+        }
+
+        ComparisonRows.Clear();
+
+        ComparisonRows.Add(new ComparisonRow(
+            "Cost",
+            UserProjection.TotalCost.ToString("0.0") + "m", NeutralColor,
+            RivalProjection.TotalCost.ToString("0.0") + "m", NeutralColor,
+            CandidateProjection.TotalCost.ToString("0.0") + "m", NeutralColor));
+
+        ComparisonRows.Add(new ComparisonRow(
+            "Remaining",
+            UserProjection.RemainingBudget.ToString("0.0") + "m", RemainingColor(UserProjection),
+            RivalProjection.RemainingBudget.ToString("0.0") + "m", RemainingColor(RivalProjection),
+            CandidateProjection.RemainingBudget.ToString("0.0") + "m", RemainingColor(CandidateProjection)));
+
+        ComparisonRows.Add(new ComparisonRow(
+            "Points",
+            UserProjection.ExpectedPoints.ToString("0.0"), NeutralColor,
+            RivalProjection.ExpectedPoints.ToString("0.0"), NeutralColor,
+            CandidateProjection.ExpectedPoints.ToString("0.0"), NeutralColor));
+
+        ComparisonRows.Add(new ComparisonRow(
+            "Δ Budget",
+            UserProjection.ExpectedBudgetChange.ToString("+0.0;-0.0;0.0") + "m", SignColor(UserProjection.ExpectedBudgetChange),
+            RivalProjection.ExpectedBudgetChange.ToString("+0.0;-0.0;0.0") + "m", SignColor(RivalProjection.ExpectedBudgetChange),
+            CandidateProjection.ExpectedBudgetChange.ToString("+0.0;-0.0;0.0") + "m", SignColor(CandidateProjection.ExpectedBudgetChange)));
+    }
+
+    private static string RemainingColor(TeamProjection projection) =>
+        projection.IsOverBudget ? NegativeColor : NeutralColor;
+
+    private static string SignColor(decimal value) =>
+        value > 0m ? PositiveColor : value < 0m ? NegativeColor : "#617086";
 
     private void OnComparisonChanged()
     {
