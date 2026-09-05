@@ -8,6 +8,7 @@ namespace F1Team.Data.Importing;
 public sealed class F1FantasyToolsDataImporter
 {
     private static readonly Uri BudgetBuilderUri = new("https://f1fantasytools.com/budget-builder");
+    private static readonly Uri StatisticsUri = new("https://f1fantasytools.com/statistics");
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly HttpClient _httpClient;
 
@@ -23,8 +24,19 @@ public sealed class F1FantasyToolsDataImporter
 
     public async Task<FantasyDataSet> ImportAsync(CancellationToken cancellationToken = default)
     {
-        var html = await _httpClient.GetStringAsync(BudgetBuilderUri, cancellationToken);
-        return Parse(html, DateTimeOffset.UtcNow);
+        var budgetBuilderHtml = await _httpClient.GetStringAsync(BudgetBuilderUri, cancellationToken);
+        var dataSet = Parse(budgetBuilderHtml, DateTimeOffset.UtcNow);
+
+        try
+        {
+            var statisticsHtml = await _httpClient.GetStringAsync(StatisticsUri, cancellationToken);
+            var metrics = ParseStatisticsMetrics(statisticsHtml, dataSet.RaceContext.SprintWeekend);
+            return ApplyHistoricalPoints(dataSet, metrics);
+        }
+        catch when (HasUsableSimulationExpectedPoints(dataSet))
+        {
+            return dataSet;
+        }
     }
 
     public FantasyDataSet Parse(string html, DateTimeOffset fetchedAtUtc)
@@ -43,17 +55,21 @@ public sealed class F1FantasyToolsDataImporter
             : default;
         var primarySimId = GetString(primarySim, "id");
 
+        var hasSimulationData = primarySimId is not null;
+
         var drivers = ParseAssets(
             bbTableAssets.RootElement.GetProperty("drivers"),
             FantasyAssetType.Driver,
             primarySim,
-            primarySimId).ToArray();
+            primarySimId,
+            hasSimulationData).ToArray();
 
         var constructors = ParseAssets(
             bbTableAssets.RootElement.GetProperty("constructors"),
             FantasyAssetType.Constructor,
             primarySim,
-            primarySimId).ToArray();
+            primarySimId,
+            hasSimulationData).ToArray();
 
         var raceContext = new RaceContext(
             GetString(currentRace.RootElement, "id") ?? "",
@@ -68,17 +84,219 @@ public sealed class F1FantasyToolsDataImporter
         return new FantasyDataSet(drivers, constructors, raceContext);
     }
 
+    public IReadOnlyDictionary<string, decimal> ParseStatisticsAverages(string html)
+    {
+        return ParseStatisticsMetrics(html, upcomingSprintWeekend: false).ToDictionary(
+            item => item.Key,
+            item => item.Value.SeasonAverage,
+            StringComparer.OrdinalIgnoreCase);
+    }
+
+    public IReadOnlyDictionary<string, HistoricalPointsMetrics> ParseStatisticsMetrics(
+        string html,
+        bool upcomingSprintWeekend)
+    {
+        var payload = DecodeNextPayload(html, requiredToken: "\"totalPoints\"");
+        var scoresByAsset = new Dictionary<string, SortedDictionary<int, RaceScore>>(StringComparer.OrdinalIgnoreCase);
+        var countedAssetsByRace = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var raceMatches = Regex.Matches(
+            payload,
+            "\"(?<race>\\d+)\":\\{\"drivers\":\\[",
+            RegexOptions.Singleline);
+
+        foreach (Match match in raceMatches)
+        {
+            var raceKey = match.Groups["race"].Value;
+            if (!int.TryParse(raceKey, out var raceNumber))
+            {
+                continue;
+            }
+
+            var objectStart = match.Value.IndexOf('{') + match.Index;
+            using var race = JsonDocument.Parse(ExtractBalancedJson(payload, objectStart));
+
+            AccumulateRaceScores(race.RootElement, "drivers", raceKey, raceNumber, scoresByAsset, countedAssetsByRace);
+            AccumulateRaceScores(race.RootElement, "constructors", raceKey, raceNumber, scoresByAsset, countedAssetsByRace);
+        }
+
+        return scoresByAsset.ToDictionary(
+            item => item.Key,
+            item => CalculateMetrics(item.Value.Values, upcomingSprintWeekend),
+            StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static FantasyDataSet ApplyHistoricalPoints(
+        FantasyDataSet dataSet,
+        IReadOnlyDictionary<string, HistoricalPointsMetrics> metricsByAssetId)
+    {
+        var drivers = ApplyHistoricalPoints(dataSet.Drivers, metricsByAssetId).ToArray();
+        var constructors = ApplyHistoricalPoints(dataSet.Constructors, metricsByAssetId).ToArray();
+        return dataSet with { Drivers = drivers, Constructors = constructors };
+    }
+
+    private static bool HasUsableSimulationExpectedPoints(FantasyDataSet dataSet) =>
+        dataSet.Drivers.Concat(dataSet.Constructors).Any(asset => asset.SimulationExpectedPoints > 0m);
+
+    private static IEnumerable<FantasyAsset> ApplyHistoricalPoints(
+        IEnumerable<FantasyAsset> assets,
+        IReadOnlyDictionary<string, HistoricalPointsMetrics> metricsByAssetId)
+    {
+        foreach (var asset in assets)
+        {
+            if (!metricsByAssetId.TryGetValue(asset.Id, out var metrics))
+            {
+                yield return asset;
+                continue;
+            }
+
+            var expectedPoints = asset.SimulationExpectedPoints is null
+                ? metrics.SeasonAverage
+                : asset.ExpectedPoints;
+
+            yield return asset with
+            {
+                ExpectedPoints = expectedPoints,
+                AverageRacePoints = metrics.SeasonAverage,
+                LastFiveRacePoints = metrics.LastFiveAverage,
+                TrimmedAverageRacePoints = metrics.TrimmedSeasonAverage,
+                TrimmedLastFiveRacePoints = metrics.TrimmedLastFiveAverage,
+                HistoricalPointsStandardDeviation = metrics.StandardDeviation,
+                AverageSprintPoints = metrics.AverageSprintPoints,
+                HistoricalRaceCount = metrics.RaceCount,
+                LastFiveRaceCount = metrics.LastFiveRaceCount,
+                HistoricalSprintRaceCount = metrics.SprintRaceCount
+            };
+        }
+    }
+
+    private static void AccumulateRaceScores(
+        JsonElement race,
+        string assetGroupName,
+        string raceKey,
+        int raceNumber,
+        Dictionary<string, SortedDictionary<int, RaceScore>> scoresByAsset,
+        HashSet<string> countedAssetsByRace)
+    {
+        if (!race.TryGetProperty(assetGroupName, out var assets) ||
+            assets.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
+        foreach (var asset in assets.EnumerateArray())
+        {
+            var id = GetString(asset, "id");
+            if (string.IsNullOrWhiteSpace(id) ||
+                !asset.TryGetProperty("totalPoints", out var totalPoints) ||
+                totalPoints.ValueKind != JsonValueKind.Number)
+            {
+                continue;
+            }
+
+            var countedKey = $"{raceKey}:{id}";
+            if (!countedAssetsByRace.Add(countedKey))
+            {
+                continue;
+            }
+
+            if (!scoresByAsset.TryGetValue(id, out var scores))
+            {
+                scores = new SortedDictionary<int, RaceScore>();
+                scoresByAsset[id] = scores;
+            }
+
+            var sprint = GetSprintResult(asset);
+            scores[raceNumber] = new RaceScore(totalPoints.GetDecimal() - sprint.Points, sprint.Points, sprint.IsSprint);
+        }
+    }
+
+    private static HistoricalPointsMetrics CalculateMetrics(
+        IEnumerable<RaceScore> raceScores,
+        bool upcomingSprintWeekend)
+    {
+        var scores = raceScores.ToArray();
+        var basePoints = scores.Select(score => score.BasePoints).ToArray();
+        var lastFiveBasePoints = basePoints.TakeLast(5).ToArray();
+        var sprintPoints = scores.Where(score => score.IsSprint).Select(score => score.SprintPoints).ToArray();
+        var sprintUplift = upcomingSprintWeekend && sprintPoints.Length > 0 ? Average(sprintPoints) : 0m;
+
+        return new HistoricalPointsMetrics(
+            Round(Average(basePoints) + sprintUplift),
+            Round(Average(lastFiveBasePoints) + sprintUplift),
+            Round(TrimmedAverage(basePoints) + sprintUplift),
+            Round(TrimmedAverage(lastFiveBasePoints) + sprintUplift),
+            Round(StandardDeviation(basePoints)),
+            Round(sprintPoints.Length > 0 ? Average(sprintPoints) : 0m),
+            basePoints.Length,
+            lastFiveBasePoints.Length,
+            sprintPoints.Length);
+    }
+
+    private static (bool IsSprint, decimal Points) GetSprintResult(JsonElement asset)
+    {
+        if (!asset.TryGetProperty("raceResult", out var raceResult) ||
+            !raceResult.TryGetProperty("S", out var sprintResult))
+        {
+            return (false, 0m);
+        }
+
+        if (!sprintResult.TryGetProperty("totalPoints", out var totalPoints) ||
+            !totalPoints.TryGetProperty("points", out var points) ||
+            points.ValueKind != JsonValueKind.Number)
+        {
+            return (true, 0m);
+        }
+
+        return (true, points.GetDecimal());
+    }
+
+    private static decimal TrimmedAverage(IReadOnlyCollection<decimal> values)
+    {
+        var trimCount = values.Count switch
+        {
+            >= 11 => 2,
+            >= 5 => 1,
+            _ => 0
+        };
+
+        return Average(values.OrderBy(value => value).Skip(trimCount).Take(values.Count - (trimCount * 2)));
+    }
+
+    private static decimal Average(IEnumerable<decimal> values)
+    {
+        var materialized = values as decimal[] ?? values.ToArray();
+        return materialized.Length == 0 ? 0m : materialized.Average();
+    }
+
+    private static decimal StandardDeviation(IReadOnlyCollection<decimal> values)
+    {
+        if (values.Count < 2)
+        {
+            return 0m;
+        }
+
+        var average = values.Average();
+        var variance = values.Average(value => (value - average) * (value - average));
+        return (decimal)Math.Sqrt((double)variance);
+    }
+
+    private static decimal Round(decimal value) => decimal.Round(value, 1, MidpointRounding.AwayFromZero);
+
+    private sealed record RaceScore(decimal BasePoints, decimal SprintPoints, bool IsSprint);
+
     private static IEnumerable<FantasyAsset> ParseAssets(
         JsonElement assets,
         FantasyAssetType assetType,
         JsonElement primarySim,
-        string? primarySimId)
+        string? primarySimId,
+        bool hasSimulationData)
     {
         foreach (var asset in assets.EnumerateArray())
         {
             var id = GetString(asset, "id") ?? "";
             var abbreviation = GetString(asset, "abbreviation") ?? id;
-            var expectedPoints = GetSimulationExpectedPoints(asset, primarySimId);
+            var simulationExpectedPoints = GetSimulationExpectedPoints(asset, primarySimId);
+            var expectedPoints = simulationExpectedPoints ?? 0m;
             var expectedBudgetChange = GetExpectedBudgetChange(primarySim, assetType, id);
 
             yield return new FantasyAsset(
@@ -93,7 +311,8 @@ public sealed class F1FantasyToolsDataImporter
                 PriorRacePoints: GetNullableDecimal(asset, "priorRacePoints"),
                 PriorPriorRacePoints: GetNullableDecimal(asset, "priorPriorRacePoints"),
                 RequiredPoints: ParseRequiredPoints(asset),
-                PriceChangeOdds: ParsePriceChangeOdds(asset, primarySimId));
+                PriceChangeOdds: ParsePriceChangeOdds(asset, primarySimId),
+                SimulationExpectedPoints: hasSimulationData ? simulationExpectedPoints : null);
         }
     }
 
@@ -127,13 +346,13 @@ public sealed class F1FantasyToolsDataImporter
             GetNullableDecimal(odds, "GREAT"));
     }
 
-    private static decimal GetSimulationExpectedPoints(JsonElement asset, string? primarySimId)
+    private static decimal? GetSimulationExpectedPoints(JsonElement asset, string? primarySimId)
     {
         if (primarySimId is null ||
             !asset.TryGetProperty("simulationExpectedPoints", out var expectedBySim) ||
             !expectedBySim.TryGetProperty(primarySimId, out var expected))
         {
-            return 0m;
+            return null;
         }
 
         return expected.GetDecimal();
@@ -180,7 +399,7 @@ public sealed class F1FantasyToolsDataImporter
         return sign * tenths / 10m;
     }
 
-    private static string DecodeNextPayload(string html)
+    private static string DecodeNextPayload(string html, string requiredToken = "\"bbTableAssets\"")
     {
         var builder = new StringBuilder();
         var matches = Regex.Matches(
@@ -196,9 +415,9 @@ public sealed class F1FantasyToolsDataImporter
         }
 
         var payload = builder.ToString();
-        if (!payload.Contains("\"bbTableAssets\"", StringComparison.Ordinal))
+        if (!payload.Contains(requiredToken, StringComparison.Ordinal))
         {
-            throw new InvalidOperationException("Could not find Budget Builder data in the page payload.");
+            throw new InvalidOperationException("Could not find the expected data in the page payload.");
         }
 
         return payload;

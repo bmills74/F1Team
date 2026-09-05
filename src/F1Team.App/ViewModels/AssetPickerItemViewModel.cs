@@ -10,10 +10,12 @@ public sealed class AssetPickerItemViewModel : ObservableObject
     private bool _isSelectedByCandidate;
     private bool _isAffordableForActiveSlot = true;
     private bool _isSelectable = true;
+    private readonly string? _volatilityText;
 
-    public AssetPickerItemViewModel(FantasyAsset asset)
+    public AssetPickerItemViewModel(FantasyAsset asset, string? volatilityText = null)
     {
         Asset = asset;
+        _volatilityText = volatilityText;
     }
 
     public FantasyAsset Asset { get; }
@@ -45,7 +47,48 @@ public sealed class AssetPickerItemViewModel : ObservableObject
         Asset.PriorRacePoints is not null ||
         Asset.PriorPriorRacePoints is not null ||
         Asset.RequiredPoints is not null ||
-        Asset.PriceChangeOdds is not null;
+        Asset.PriceChangeOdds is not null ||
+        Asset.HistoricalPointsStandardDeviation is not null;
+
+    public string VolatilityText
+    {
+        get
+        {
+            if (Asset.HistoricalPointsStandardDeviation is null || Asset.HistoricalRaceCount < 3)
+            {
+                return Asset.HistoricalRaceCount > 0 ? "Low conf." : string.Empty;
+            }
+
+            return _volatilityText ?? string.Empty;
+        }
+    }
+
+    public string VolatilityColor => VolatilityText switch
+    {
+        "Low" => "#1b7f3a",
+        "Medium" => "#9a6700",
+        "High" => "#b42318",
+        _ => "#617086"
+    };
+
+    public string VolatilityDetailLine
+    {
+        get
+        {
+            if (Asset.HistoricalPointsStandardDeviation is null || Asset.HistoricalRaceCount == 0)
+            {
+                return string.Empty;
+            }
+
+            var detail = Asset.HistoricalRaceCount < 3
+                ? $"Historical confidence: low ({Asset.HistoricalRaceCount} races)"
+                : $"Format-adjusted volatility: {VolatilityText} relative to other {Type.ToString().ToLowerInvariant()}s (σ {Asset.HistoricalPointsStandardDeviation:0.0}, {Asset.HistoricalRaceCount} races)";
+
+            return Asset.HistoricalSprintRaceCount > 0
+                ? $"{detail}   ·   sprint uplift {Asset.AverageSprintPoints:0.0} pts"
+                : detail;
+        }
+    }
 
     /// <summary>Recent form: points scored in the last two races, when available.</summary>
     public string RecentFormLine

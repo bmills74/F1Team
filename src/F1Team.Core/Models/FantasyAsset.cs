@@ -12,7 +12,17 @@ public sealed record FantasyAsset(
     decimal? PriorRacePoints = null,
     decimal? PriorPriorRacePoints = null,
     RequiredPoints? RequiredPoints = null,
-    PriceChangeOdds? PriceChangeOdds = null)
+    PriceChangeOdds? PriceChangeOdds = null,
+    decimal? SimulationExpectedPoints = null,
+    decimal? AverageRacePoints = null,
+    decimal? LastFiveRacePoints = null,
+    decimal? TrimmedAverageRacePoints = null,
+    decimal? TrimmedLastFiveRacePoints = null,
+    decimal? HistoricalPointsStandardDeviation = null,
+    decimal? AverageSprintPoints = null,
+    int HistoricalRaceCount = 0,
+    int LastFiveRaceCount = 0,
+    int HistoricalSprintRaceCount = 0)
 {
     public string Name => string.IsNullOrWhiteSpace(DisplayName) ? Abbreviation : DisplayName;
 }

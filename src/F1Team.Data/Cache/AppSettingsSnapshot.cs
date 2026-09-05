@@ -18,4 +18,7 @@ public sealed record AppSettingsSnapshot(
     decimal CandidateRemainingBudget = 0m,
     decimal CandidateActualBudget = 0m,
     string? CandidateX2DriverId = null,
-    int SelectedComparisonTabIndex = 0);
+    int SelectedComparisonTabIndex = 0,
+    bool UseAverageRacePoints = false,
+    string? ExpectedPointsSource = null,
+    bool TrimHistoricalOutliers = false);

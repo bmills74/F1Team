@@ -1,0 +1,56 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v7.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v7.0": {
+      "F1Team.App/1.0.0": {
+        "dependencies": {
+          "F1Team.Core": "1.0.0",
+          "F1Team.Data": "1.0.0"
+        },
+        "runtime": {
+          "F1Team.App.dll": {}
+        }
+      },
+      "F1Team.Core/1.0.0": {
+        "runtime": {
+          "F1Team.Core.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
+      },
+      "F1Team.Data/1.0.0": {
+        "dependencies": {
+          "F1Team.Core": "1.0.0"
+        },
+        "runtime": {
+          "F1Team.Data.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "F1Team.App/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "F1Team.Core/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "F1Team.Data/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}

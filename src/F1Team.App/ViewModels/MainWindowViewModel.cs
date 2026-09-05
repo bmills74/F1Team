@@ -11,6 +11,9 @@ namespace F1Team.App.ViewModels;
 
 public sealed class MainWindowViewModel : ObservableObject
 {
+    private const string SimulationPointsSource = "Simulation";
+    private const string SeasonAveragePointsSource = "Season average";
+    private const string LastFivePointsSource = "Last 5 races";
     private readonly BudgetProjectionCalculator _calculator = new();
     private readonly F1FantasyToolsDataImporter _importer = new();
     private readonly FantasyDataCache _cache = new();
@@ -33,6 +36,8 @@ public sealed class MainWindowViewModel : ObservableObject
     private string _simulationTitle = "Mock projections";
     private bool _isRefreshing;
     private bool _isLoadingSettings;
+    private string _selectedPointsSource = SimulationPointsSource;
+    private bool _trimHistoricalOutliers;
     private AssetSlotViewModel? _activeSlot;
     private FantasyAsset? _myX2Driver;
     private FantasyAsset? _rivalX2Driver;
@@ -43,7 +48,8 @@ public sealed class MainWindowViewModel : ObservableObject
         DriverAssets = new ObservableCollection<FantasyAsset>(CreateSampleDrivers());
         ConstructorAssets = new ObservableCollection<FantasyAsset>(CreateSampleConstructors());
         AllAssets = new ObservableCollection<FantasyAsset>(DriverAssets.Concat(ConstructorAssets));
-        AssetPickerItems = new ObservableCollection<AssetPickerItemViewModel>(AllAssets.Select(asset => new AssetPickerItemViewModel(asset)));
+        RefreshAvailablePointsSources(AllAssets);
+        AssetPickerItems = new ObservableCollection<AssetPickerItemViewModel>(CreatePickerItems(AllAssets));
         AssetPickerView = CollectionViewSource.GetDefaultView(AssetPickerItems);
         AssetPickerView.Filter = FilterAssetPicker;
         SortAssetPicker("ExpectedPoints");
@@ -108,6 +114,8 @@ public sealed class MainWindowViewModel : ObservableObject
     public ObservableCollection<AssetSlotViewModel> CandidateConstructorSlots { get; }
 
     public ObservableCollection<ComparisonRow> ComparisonRows { get; }
+
+    public ObservableCollection<string> PointsSources { get; } = new();
 
     public IReadOnlyList<FantasyAsset> UserSelectedDrivers => UserDriverSlots
         .Select(slot => slot.SelectedAsset)
@@ -421,6 +429,72 @@ public sealed class MainWindowViewModel : ObservableObject
         private set => SetProperty(ref _simulationTitle, value);
     }
 
+    public string SelectedPointsSource
+    {
+        get => _selectedPointsSource;
+        set
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return;
+            }
+
+            var source = ResolveAvailablePointsSource(value);
+            if (!SetProperty(ref _selectedPointsSource, source))
+            {
+                return;
+            }
+
+            if (source == SimulationPointsSource && _trimHistoricalOutliers)
+            {
+                _trimHistoricalOutliers = false;
+                OnPropertyChanged(nameof(TrimHistoricalOutliers));
+            }
+
+            ApplyExpectedPointsSource();
+            OnPropertyChanged(nameof(PointsSourceTitle));
+            OnPropertyChanged(nameof(CanTrimHistoricalOutliers));
+            OnPropertyChanged(nameof(IsSimulationPointsAvailable));
+            OnPropertyChanged(nameof(IsAverageRacePointsAvailable));
+            OnPropertyChanged(nameof(IsLastFiveRacePointsAvailable));
+            QueueSaveSettings();
+        }
+    }
+
+    public bool TrimHistoricalOutliers
+    {
+        get => _trimHistoricalOutliers;
+        set
+        {
+            if (!SetProperty(ref _trimHistoricalOutliers, value))
+            {
+                return;
+            }
+
+            ApplyExpectedPointsSource();
+            OnPropertyChanged(nameof(PointsSourceTitle));
+            QueueSaveSettings();
+        }
+    }
+
+    public string PointsSourceTitle =>
+        TrimHistoricalOutliers && SelectedPointsSource != SimulationPointsSource
+            ? $"{SelectedPointsSource} · trimmed"
+            : SelectedPointsSource;
+
+    public bool IsSimulationPointsAvailable => AllAssets.Any(asset => asset.SimulationExpectedPoints is > 0m);
+
+    public bool IsAverageRacePointsAvailable => AllAssets.Any(asset => asset.AverageRacePoints is not null);
+
+    public bool IsLastFiveRacePointsAvailable => AllAssets.Any(asset => asset.LastFiveRacePoints is not null);
+
+    public bool CanTrimHistoricalOutliers => SelectedPointsSource switch
+    {
+        SeasonAveragePointsSource => IsAverageRacePointsAvailable,
+        LastFivePointsSource => IsLastFiveRacePointsAvailable,
+        _ => false
+    };
+
     public bool IsRefreshing
     {
         get => _isRefreshing;
@@ -632,6 +706,7 @@ public sealed class MainWindowViewModel : ObservableObject
             ApplyDataSet(cached, keepExistingSelections: true);
             if (settings is not null)
             {
+                ApplyPointsSettings(settings);
                 ApplySettingsSelections(settings);
                 Recalculate();
             }
@@ -667,6 +742,8 @@ public sealed class MainWindowViewModel : ObservableObject
             ? settings.CandidateActualBudget
             : candidateCost + settings.CandidateRemainingBudget;
 
+        ApplyPointsSettings(settings);
+
         SelectedComparisonTabIndex = settings.SelectedComparisonTabIndex is 0 or 1
             ? settings.SelectedComparisonTabIndex
             : 0;
@@ -701,7 +778,7 @@ public sealed class MainWindowViewModel : ObservableObject
         {
             IsRefreshing = true;
             DataStatus = "Refreshing F1FantasyTools data...";
-            var dataSet = await _importer.ImportAsync();
+            var dataSet = PreserveExistingSimulationPointsWhenIncomingAllZero(await _importer.ImportAsync());
             ApplyDataSet(dataSet, keepExistingSelections: true);
             await _cache.SaveAsync(dataSet);
             QueueSaveSettings();
@@ -726,15 +803,23 @@ public sealed class MainWindowViewModel : ObservableObject
         var previousRivalX2DriverId = RivalX2Driver?.Id;
         var previousCandidateX2DriverId = CandidateX2Driver?.Id;
 
-        ReplaceAssets(DriverAssets, dataSet.Drivers);
-        ReplaceAssets(ConstructorAssets, dataSet.Constructors);
+        RefreshAvailablePointsSources(dataSet.Drivers.Concat(dataSet.Constructors));
+        _selectedPointsSource = ResolveAvailablePointsSource(SelectedPointsSource);
+        if (_selectedPointsSource == SimulationPointsSource)
+        {
+            _trimHistoricalOutliers = false;
+        }
+        OnPropertyChanged(nameof(SelectedPointsSource));
+        OnPropertyChanged(nameof(TrimHistoricalOutliers));
+
+        ReplaceAssets(DriverAssets, dataSet.Drivers.Select(ApplyExpectedPointsSource));
+        ReplaceAssets(ConstructorAssets, dataSet.Constructors.Select(ApplyExpectedPointsSource));
         ReplaceAssets(AllAssets, DriverAssets.Concat(ConstructorAssets));
-        ReplacePickerItems(dataSet.Drivers.Concat(dataSet.Constructors));
+        ReplacePickerItems(AllAssets);
 
         RaceTitle = $"Round {dataSet.RaceContext.RoundNumber}: {dataSet.RaceContext.RaceName}";
         UpcomingRaceDetails = FormatUpcomingRaceDetails(dataSet.RaceContext);
         SimulationTitle = dataSet.RaceContext.SimulationName ?? "Imported projections";
-
         if (keepExistingSelections)
         {
             RestoreSelections(UserSlots, previousUserSelections);
@@ -752,6 +837,11 @@ public sealed class MainWindowViewModel : ObservableObject
         }
 
         Recalculate();
+        OnPropertyChanged(nameof(PointsSourceTitle));
+        OnPropertyChanged(nameof(IsSimulationPointsAvailable));
+        OnPropertyChanged(nameof(IsAverageRacePointsAvailable));
+        OnPropertyChanged(nameof(IsLastFiveRacePointsAvailable));
+        OnPropertyChanged(nameof(CanTrimHistoricalOutliers));
     }
 
     private void ActivateSlot(AssetSlotViewModel? slot)
@@ -1171,7 +1261,10 @@ public sealed class MainWindowViewModel : ObservableObject
             CandidateProjection.RemainingBudget,
             CandidateActualBudget,
             CandidateX2Driver?.Id,
-            SelectedComparisonTabIndex);
+            SelectedComparisonTabIndex,
+            SelectedPointsSource != SimulationPointsSource,
+            SelectedPointsSource,
+            TrimHistoricalOutliers);
     }
 
     private static void ReplaceAssets(ObservableCollection<FantasyAsset> target, IEnumerable<FantasyAsset> assets)
@@ -1181,6 +1274,159 @@ public sealed class MainWindowViewModel : ObservableObject
         {
             target.Add(asset);
         }
+    }
+
+    private void ApplyPointsSettings(AppSettingsSnapshot settings)
+    {
+        var requestedSource = settings.ExpectedPointsSource ??
+                              (settings.UseAverageRacePoints ? SeasonAveragePointsSource : SimulationPointsSource);
+        _selectedPointsSource = ResolveAvailablePointsSource(requestedSource);
+        _trimHistoricalOutliers = _selectedPointsSource != SimulationPointsSource && settings.TrimHistoricalOutliers;
+        OnPropertyChanged(nameof(SelectedPointsSource));
+        OnPropertyChanged(nameof(TrimHistoricalOutliers));
+        OnPropertyChanged(nameof(PointsSourceTitle));
+        OnPropertyChanged(nameof(CanTrimHistoricalOutliers));
+        ApplyExpectedPointsSource();
+    }
+
+    private void RefreshAvailablePointsSources(IEnumerable<FantasyAsset> assets)
+    {
+        var availableAssets = assets.ToArray();
+        PointsSources.Clear();
+
+        if (availableAssets.Any(asset => asset.SimulationExpectedPoints is > 0m))
+        {
+            PointsSources.Add(SimulationPointsSource);
+        }
+
+        if (availableAssets.Any(asset => asset.AverageRacePoints is not null))
+        {
+            PointsSources.Add(SeasonAveragePointsSource);
+        }
+
+        if (availableAssets.Any(asset => asset.LastFiveRacePoints is not null))
+        {
+            PointsSources.Add(LastFivePointsSource);
+        }
+    }
+
+    private string ResolveAvailablePointsSource(string? requestedSource)
+    {
+        if (requestedSource is not null && PointsSources.Contains(requestedSource))
+        {
+            return requestedSource;
+        }
+
+        return PointsSources.FirstOrDefault(source => source == SeasonAveragePointsSource) ??
+               PointsSources.FirstOrDefault(source => source == LastFivePointsSource) ??
+               PointsSources.FirstOrDefault(source => source == SimulationPointsSource) ??
+               SimulationPointsSource;
+    }
+
+    private void ApplyExpectedPointsSource()
+    {
+        if (!IsInitialized())
+        {
+            return;
+        }
+
+        var previousUserSelections = CaptureSelectedIds(UserSlots);
+        var previousRivalSelections = CaptureSelectedIds(RivalSlots);
+        var previousCandidateSelections = CaptureSelectedIds(CandidateSlots);
+        var previousMyX2DriverId = MyX2Driver?.Id;
+        var previousRivalX2DriverId = RivalX2Driver?.Id;
+        var previousCandidateX2DriverId = CandidateX2Driver?.Id;
+
+        ReplaceAssets(DriverAssets, DriverAssets.Select(ApplyExpectedPointsSource).ToArray());
+        ReplaceAssets(ConstructorAssets, ConstructorAssets.Select(ApplyExpectedPointsSource).ToArray());
+        ReplaceAssets(AllAssets, DriverAssets.Concat(ConstructorAssets));
+        ReplacePickerItems(AllAssets);
+
+        RestoreSelections(UserSlots, previousUserSelections);
+        RestoreSelections(RivalSlots, previousRivalSelections);
+        RestoreSelections(CandidateSlots, previousCandidateSelections);
+        MyX2Driver = FindSelectedDriver(UserDriverSlots, previousMyX2DriverId);
+        RivalX2Driver = FindSelectedDriver(RivalDriverSlots, previousRivalX2DriverId);
+        CandidateX2Driver = FindSelectedDriver(CandidateDriverSlots, previousCandidateX2DriverId);
+        Recalculate();
+    }
+
+    private FantasyAsset ApplyExpectedPointsSource(FantasyAsset asset)
+    {
+        var seasonAverage = TrimHistoricalOutliers
+            ? asset.TrimmedAverageRacePoints ?? asset.AverageRacePoints
+            : asset.AverageRacePoints;
+        var lastFiveAverage = TrimHistoricalOutliers
+            ? asset.TrimmedLastFiveRacePoints ?? asset.LastFiveRacePoints
+            : asset.LastFiveRacePoints;
+
+        var expectedPoints = SelectedPointsSource switch
+        {
+            SeasonAveragePointsSource => seasonAverage ?? lastFiveAverage ?? asset.SimulationExpectedPoints ?? asset.ExpectedPoints,
+            LastFivePointsSource => lastFiveAverage ?? seasonAverage ?? asset.SimulationExpectedPoints ?? asset.ExpectedPoints,
+            _ => asset.SimulationExpectedPoints ?? seasonAverage ?? lastFiveAverage ?? asset.ExpectedPoints
+        };
+
+        return asset with { ExpectedPoints = expectedPoints };
+    }
+
+    private FantasyDataSet PreserveExistingSimulationPointsWhenIncomingAllZero(FantasyDataSet dataSet)
+    {
+        if (!HasOnlyZeroSimulationPoints(dataSet))
+        {
+            return dataSet;
+        }
+
+        var previousSimulationPointsById = AllAssets
+            .Where(asset => asset.SimulationExpectedPoints > 0m)
+            .GroupBy(asset => asset.Id, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => group.First().SimulationExpectedPoints!.Value,
+                StringComparer.OrdinalIgnoreCase);
+
+        return dataSet with
+        {
+            Drivers = PreserveExistingSimulationPoints(dataSet.Drivers, previousSimulationPointsById).ToArray(),
+            Constructors = PreserveExistingSimulationPoints(dataSet.Constructors, previousSimulationPointsById).ToArray()
+        };
+    }
+
+    private static IEnumerable<FantasyAsset> PreserveExistingSimulationPoints(
+        IEnumerable<FantasyAsset> incomingAssets,
+        IReadOnlyDictionary<string, decimal> previousSimulationPointsById)
+    {
+        foreach (var asset in incomingAssets)
+        {
+            if (previousSimulationPointsById.TryGetValue(asset.Id, out var previousSimulationPoints))
+            {
+                yield return asset with
+                {
+                    ExpectedPoints = previousSimulationPoints,
+                    SimulationExpectedPoints = previousSimulationPoints
+                };
+                continue;
+            }
+
+            yield return asset.SimulationExpectedPoints == 0m
+                ? asset with
+                {
+                    ExpectedPoints = asset.AverageRacePoints ?? asset.ExpectedPoints,
+                    SimulationExpectedPoints = null
+                }
+                : asset;
+        }
+    }
+
+    private static bool HasOnlyZeroSimulationPoints(FantasyDataSet dataSet)
+    {
+        var simulationAssets = dataSet.Drivers
+            .Concat(dataSet.Constructors)
+            .Where(asset => asset.SimulationExpectedPoints is not null)
+            .ToArray();
+
+        return simulationAssets.Length > 0 &&
+               simulationAssets.All(asset => asset.SimulationExpectedPoints == 0m);
     }
 
     private static string FormatUpcomingRaceDetails(RaceContext raceContext)
@@ -1202,12 +1448,66 @@ public sealed class MainWindowViewModel : ObservableObject
     private void ReplacePickerItems(IEnumerable<FantasyAsset> assets)
     {
         AssetPickerItems.Clear();
-        foreach (var asset in assets)
+        foreach (var item in CreatePickerItems(assets))
         {
-            AssetPickerItems.Add(new AssetPickerItemViewModel(asset));
+            AssetPickerItems.Add(item);
         }
 
         RefreshAssetPickerState();
+    }
+
+    private static IEnumerable<AssetPickerItemViewModel> CreatePickerItems(IEnumerable<FantasyAsset> assets)
+    {
+        var materialized = assets.ToArray();
+        var riskById = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var typeGroup in materialized.GroupBy(asset => asset.Type))
+        {
+            var standardDeviations = typeGroup
+                .Where(asset => asset.HistoricalRaceCount >= 3 && asset.HistoricalPointsStandardDeviation is not null)
+                .Select(asset => asset.HistoricalPointsStandardDeviation!.Value)
+                .OrderBy(value => value)
+                .ToArray();
+            if (standardDeviations.Length == 0)
+            {
+                continue;
+            }
+
+            var lowThreshold = Percentile(standardDeviations, 1m / 3m);
+            var highThreshold = Percentile(standardDeviations, 2m / 3m);
+            foreach (var asset in typeGroup.Where(asset => asset.HistoricalPointsStandardDeviation is not null))
+            {
+                var deviation = asset.HistoricalPointsStandardDeviation!.Value;
+                riskById[asset.Id] = deviation <= lowThreshold
+                    ? "Low"
+                    : deviation <= highThreshold
+                        ? "Medium"
+                        : "High";
+            }
+        }
+
+        return materialized.Select(asset => new AssetPickerItemViewModel(
+            asset,
+            riskById.TryGetValue(asset.Id, out var risk) ? risk : null));
+    }
+
+    private static decimal Percentile(IReadOnlyList<decimal> sortedValues, decimal percentile)
+    {
+        if (sortedValues.Count == 1)
+        {
+            return sortedValues[0];
+        }
+
+        var position = (sortedValues.Count - 1) * percentile;
+        var lowerIndex = (int)Math.Floor(position);
+        var upperIndex = (int)Math.Ceiling(position);
+        if (lowerIndex == upperIndex)
+        {
+            return sortedValues[lowerIndex];
+        }
+
+        var fraction = position - lowerIndex;
+        return sortedValues[lowerIndex] + ((sortedValues[upperIndex] - sortedValues[lowerIndex]) * fraction);
     }
 
     private void SeedSelections()
@@ -1308,6 +1608,7 @@ public sealed class MainWindowViewModel : ObservableObject
             PriorRacePoints: priorRace,
             PriorPriorRacePoints: priorPrior,
             RequiredPoints: required,
-            PriceChangeOdds: odds);
+            PriceChangeOdds: odds,
+            SimulationExpectedPoints: points);
     }
 }

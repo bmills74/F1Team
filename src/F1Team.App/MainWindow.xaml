@@ -234,6 +234,23 @@
                         MinHeight="32"
                         Padding="14,0"
                         Margin="0,0,16,0" />
+                <TextBlock Text="Expected points" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="#617086" />
+                <ComboBox ItemsSource="{Binding PointsSources}"
+                          SelectedItem="{Binding SelectedPointsSource, Mode=TwoWay}"
+                          MinWidth="126"
+                          VerticalAlignment="Center"
+                          Margin="0,0,10,0"
+                          ToolTip="Choose simulation points, the format-adjusted season average, or recent five-race form." />
+                <CheckBox Content="Trim outliers"
+                          IsChecked="{Binding TrimHistoricalOutliers, Mode=TwoWay}"
+                          IsEnabled="{Binding CanTrimHistoricalOutliers}"
+                          VerticalAlignment="Center"
+                          Margin="0,0,10,0"
+                          ToolTip="Remove one best and worst result for 5–10 races, or two of each for more than 10 races." />
+                <TextBlock Text="{Binding PointsSourceTitle}"
+                           VerticalAlignment="Center"
+                           Margin="0,0,16,0"
+                           Foreground="#617086" />
                 <TextBlock Text="My actual budget" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="#617086" />
                 <TextBlock Text="{Binding UserProjection.CurrentBudget, StringFormat={}{0:0.0}m}"
                            VerticalAlignment="Center"
@@ -367,6 +384,8 @@
                                                        Visibility="{Binding RequiredToFallLine, Converter={StaticResource EmptyToCollapsed}}" />
                                             <TextBlock Text="{Binding PriceOddsLine}" Foreground="#617086" Margin="0,4,0,0"
                                                        Visibility="{Binding PriceOddsLine, Converter={StaticResource EmptyToCollapsed}}" />
+                                            <TextBlock Text="{Binding VolatilityDetailLine}" Foreground="{Binding VolatilityColor}" Margin="0,4,0,0"
+                                                       Visibility="{Binding VolatilityDetailLine, Converter={StaticResource EmptyToCollapsed}}" />
                                             <TextBlock Text="No detail data available." Foreground="#8a96a8" FontStyle="Italic"
                                                        Visibility="{Binding HasDetails, Converter={StaticResource FalseToVisible}}" />
                                             <TextBlock Text="Double-click to assign to the active slot." Foreground="#8a96a8" FontStyle="Italic" Margin="0,8,0,0" />
@@ -409,6 +428,13 @@
                             <DataGridTextColumn Header="Price" Binding="{Binding Price, StringFormat={}{0:0.0}m}" Width="56" SortMemberPath="Price" />
                             <DataGridTextColumn Header="Pts" Binding="{Binding ExpectedPoints, StringFormat={}{0:0.0}}" Width="48" SortMemberPath="ExpectedPoints" />
                             <DataGridTextColumn Header="Pts/$m" Binding="{Binding PointsPerMillion, StringFormat={}{0:0.00}}" Width="54" SortMemberPath="PointsPerMillion" />
+                            <DataGridTextColumn Header="Risk" Binding="{Binding VolatilityText}" Width="58" SortMemberPath="VolatilityText">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="{Binding VolatilityColor}" />
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
                             <DataGridTextColumn Header="Δ Price" Binding="{Binding ExpectedBudgetChange, StringFormat={}{0:+0.0;-0.0;0.0}m}" Width="62" SortMemberPath="ExpectedBudgetChange">
                                 <DataGridTextColumn.ElementStyle>
                                     <Style TargetType="TextBlock">
