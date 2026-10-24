@@ -86,6 +86,48 @@ public class F1FantasyToolsDataImporterTests
     }
 
     [Fact]
+    public void ParseBoxBoxPredictions_ParsesDriverAndMapsConstructorIds()
+    {
+        var json = """
+            {
+              "season": 2026,
+              "round": 20,
+              "race": "United States Grand Prix",
+              "phase": "pre_fp",
+              "generated_at": "2026-10-13T00:04:02.433905+00:00",
+              "drivers": [{
+                "driver_id": "VER",
+                "expected_points": 26.1,
+                "projected_points": 39.3,
+                "risk_rating": 13.6,
+                "confidence": 60,
+                "mc_total_std": 18.6,
+                "mc_total_p5": -11,
+                "mc_total_p95": 51
+              }],
+              "constructors": [{
+                "constructor_id": "red_bull",
+                "expected_points": 46.6,
+                "projected_points": 61.7,
+                "risk_rating": 13.6,
+                "confidence": 60,
+                "mc_total_std": 22.7,
+                "mc_total_p5": 5.8,
+                "mc_total_p95": 80
+              }]
+            }
+            """;
+
+        var result = _importer.ParseBoxBoxPredictions(json);
+
+        Assert.Equal(20, result.Round);
+        Assert.Equal("pre_fp", result.Phase);
+        Assert.Equal(26.1m, result.Drivers["VER"].ExpectedPoints);
+        Assert.Equal(46.6m, result.Constructors["RED"].ExpectedPoints);
+        Assert.Equal(22.7m, result.Constructors["RED"].SimulationStandardDeviation);
+    }
+
+    [Fact]
     public void Parse_StoresSimulationExpectedPointsWhenPresent()
     {
         var budgetBuilderPayload = """

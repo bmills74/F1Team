@@ -240,7 +240,7 @@
                           MinWidth="126"
                           VerticalAlignment="Center"
                           Margin="0,0,10,0"
-                          ToolTip="Choose simulation points, the format-adjusted season average, or recent five-race form." />
+                          ToolTip="Choose built-in simulation points, BoxBox simulation or projected predictions, the format-adjusted season average, or recent five-race form." />
                 <CheckBox Content="Trim outliers"
                           IsChecked="{Binding TrimHistoricalOutliers, Mode=TwoWay}"
                           IsEnabled="{Binding CanTrimHistoricalOutliers}"
@@ -260,7 +260,9 @@
             </StackPanel>
         </DockPanel>
 
-        <Grid Grid.Row="1">
+        <TabControl Grid.Row="1">
+            <TabItem Header="Calculator">
+                <Grid>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="1*" />
                 <ColumnDefinition Width="1*" />
@@ -599,7 +601,36 @@
                                TextWrapping="Wrap" />
                 </StackPanel>
             </Border>
-        </Grid>
+                </Grid>
+            </TabItem>
+            <TabItem Header="BoxBox history">
+                <Grid Margin="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <TextBlock Text="Prediction source" VerticalAlignment="Center" Foreground="#617086" Margin="0,0,8,0" />
+                        <ComboBox ItemsSource="{Binding HistorySources}"
+                                  SelectedItem="{Binding SelectedHistorySource, Mode=TwoWay}"
+                                  Width="180" />
+                        <TextBlock Text="{Binding HistorySourceStatus}" VerticalAlignment="Center" Foreground="#617086" Margin="16,0,0,0" />
+                    </StackPanel>
+                    <Grid Grid.Row="1">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Text="Drivers" FontWeight="SemiBold" Foreground="#152033" Margin="0,4,0,4" />
+                        <DataGrid Grid.Row="1" x:Name="DriverHistoryGrid" ItemsSource="{Binding DriverHistoryRows}" AutoGenerateColumns="False" IsReadOnly="True" FrozenColumnCount="1" CanUserSortColumns="False" HeadersVisibility="Column" />
+                        <TextBlock Grid.Row="2" Text="Constructors" FontWeight="SemiBold" Foreground="#152033" Margin="0,14,0,4" />
+                        <DataGrid Grid.Row="3" x:Name="ConstructorHistoryGrid" ItemsSource="{Binding ConstructorHistoryRows}" AutoGenerateColumns="False" IsReadOnly="True" FrozenColumnCount="1" CanUserSortColumns="False" HeadersVisibility="Column" />
+                    </Grid>
+                </Grid>
+            </TabItem>
+        </TabControl>
 
         <Border Grid.Row="2" Background="#eaf0f8" BorderBrush="#d9dee7" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,16,0,0">
             <TextBlock Text="{Binding DataStatus}" Foreground="#46556b" />

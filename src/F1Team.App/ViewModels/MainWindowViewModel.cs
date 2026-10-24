@@ -11,7 +11,9 @@ namespace F1Team.App.ViewModels;
 
 public sealed class MainWindowViewModel : ObservableObject
 {
-    private const string SimulationPointsSource = "Simulation";
+    private const string SimulationPointsSource = "F1FantasyTools simulation";
+    private const string BoxBoxSimulationPointsSource = "BoxBox simulation";
+    private const string BoxBoxProjectedPointsSource = "BoxBox projected";
     private const string SeasonAveragePointsSource = "Season average";
     private const string LastFivePointsSource = "Last 5 races";
     private readonly BudgetProjectionCalculator _calculator = new();
@@ -37,6 +39,7 @@ public sealed class MainWindowViewModel : ObservableObject
     private bool _isRefreshing;
     private bool _isLoadingSettings;
     private string _selectedPointsSource = SimulationPointsSource;
+    private string _selectedHistorySource = BoxBoxProjectedPointsSource;
     private bool _trimHistoricalOutliers;
     private AssetSlotViewModel? _activeSlot;
     private FantasyAsset? _myX2Driver;
@@ -55,6 +58,12 @@ public sealed class MainWindowViewModel : ObservableObject
         SortAssetPicker("ExpectedPoints");
 
         ComparisonRows = new ObservableCollection<ComparisonRow>();
+        BoxBoxHistory = new ObservableCollection<BoxBoxHistoryRow>();
+        BoxBoxArchivePredictions = new ObservableCollection<BoxBoxArchivePrediction>();
+        HistoryRounds = new ObservableCollection<int>();
+        HistoryRoundHeaders = new ObservableCollection<string>();
+        DriverHistoryRows = new ObservableCollection<PredictionHistoryRow>();
+        ConstructorHistoryRows = new ObservableCollection<PredictionHistoryRow>();
 
         UserDriverSlots = CreateSlots("Driver", FantasyAssetType.Driver, 5, AssetSlotViewModel.UserTeamKey);
         UserConstructorSlots = CreateSlots("Constructor", FantasyAssetType.Constructor, 2, AssetSlotViewModel.UserTeamKey);
@@ -89,6 +98,7 @@ public sealed class MainWindowViewModel : ObservableObject
         Recalculate();
 
         _ = InitializeSavedStateAsync();
+        _ = LoadBoxBoxHistoryAsync();
     }
 
     public ObservableCollection<FantasyAsset> DriverAssets { get; }
@@ -114,6 +124,36 @@ public sealed class MainWindowViewModel : ObservableObject
     public ObservableCollection<AssetSlotViewModel> CandidateConstructorSlots { get; }
 
     public ObservableCollection<ComparisonRow> ComparisonRows { get; }
+
+    public ObservableCollection<BoxBoxHistoryRow> BoxBoxHistory { get; }
+
+    public ObservableCollection<BoxBoxArchivePrediction> BoxBoxArchivePredictions { get; }
+
+    public ObservableCollection<int> HistoryRounds { get; }
+
+    public ObservableCollection<string> HistoryRoundHeaders { get; }
+
+    public ObservableCollection<PredictionHistoryRow> DriverHistoryRows { get; }
+
+    public ObservableCollection<PredictionHistoryRow> ConstructorHistoryRows { get; }
+
+    public IReadOnlyList<string> HistorySources { get; } = new[] { BoxBoxProjectedPointsSource };
+
+    public string SelectedHistorySource
+    {
+        get => _selectedHistorySource;
+        set
+        {
+            if (string.IsNullOrWhiteSpace(value) || !HistorySources.Contains(value) ||
+                !SetProperty(ref _selectedHistorySource, value))
+            {
+                return;
+            }
+
+            RebuildPredictionHistoryRows();
+            OnPropertyChanged(nameof(HistorySourceStatus));
+        }
+    }
 
     public ObservableCollection<string> PointsSources { get; } = new();
 
@@ -455,8 +495,10 @@ public sealed class MainWindowViewModel : ObservableObject
             OnPropertyChanged(nameof(PointsSourceTitle));
             OnPropertyChanged(nameof(CanTrimHistoricalOutliers));
             OnPropertyChanged(nameof(IsSimulationPointsAvailable));
+            OnPropertyChanged(nameof(IsBoxBoxSimulationPointsAvailable));
             OnPropertyChanged(nameof(IsAverageRacePointsAvailable));
             OnPropertyChanged(nameof(IsLastFiveRacePointsAvailable));
+            DataStatus = $"Using {source} points.";
             QueueSaveSettings();
         }
     }
@@ -483,6 +525,8 @@ public sealed class MainWindowViewModel : ObservableObject
             : SelectedPointsSource;
 
     public bool IsSimulationPointsAvailable => AllAssets.Any(asset => asset.SimulationExpectedPoints is > 0m);
+
+    public bool IsBoxBoxSimulationPointsAvailable => AllAssets.Any(asset => asset.BoxBoxExpectedPoints is not null);
 
     public bool IsAverageRacePointsAvailable => AllAssets.Any(asset => asset.AverageRacePoints is not null);
 
@@ -781,8 +825,9 @@ public sealed class MainWindowViewModel : ObservableObject
             var dataSet = PreserveExistingSimulationPointsWhenIncomingAllZero(await _importer.ImportAsync());
             ApplyDataSet(dataSet, keepExistingSelections: true);
             await _cache.SaveAsync(dataSet);
+            await LoadBoxBoxHistoryAsync();
             QueueSaveSettings();
-            DataStatus = $"Live data refreshed {dataSet.RaceContext.FetchedAtUtc.LocalDateTime:g}.";
+            DataStatus = $"Live data refreshed {dataSet.RaceContext.FetchedAtUtc.LocalDateTime:g}. BoxBox: {_importer.LastBoxBoxDiagnostic}";
         }
         catch (Exception ex)
         {
@@ -793,6 +838,91 @@ public sealed class MainWindowViewModel : ObservableObject
             IsRefreshing = false;
         }
     }
+
+    private async Task LoadBoxBoxHistoryAsync()
+    {
+        try
+        {
+            var rows = await _importer.ImportBoxBoxHistoryAsync();
+            var predictions = await _importer.ImportBoxBoxArchivePredictionsAsync();
+            BoxBoxHistory.Clear();
+            foreach (var row in rows)
+            {
+                BoxBoxHistory.Add(row);
+            }
+            BoxBoxArchivePredictions.Clear();
+            foreach (var prediction in predictions)
+            {
+                BoxBoxArchivePredictions.Add(prediction);
+            }
+
+            RebuildPredictionHistoryRows();
+            OnPropertyChanged(nameof(BoxBoxHistoryStatus));
+        }
+        catch (Exception ex)
+        {
+            OnPropertyChanged(nameof(BoxBoxHistoryStatus));
+            DataStatus = $"BoxBox history unavailable. {ex.Message}";
+        }
+    }
+
+    public string BoxBoxHistoryStatus =>
+        BoxBoxHistory.Count == 0
+            ? "No completed BoxBox rounds loaded."
+            : $"{BoxBoxHistory.Count} recorded driver and constructor results loaded.";
+
+    public string HistorySourceStatus =>
+        BoxBoxArchivePredictions.Count == 0
+            ? $"{SelectedHistorySource}: no archived predictions were found; showing actual results."
+            : $"{SelectedHistorySource}: {BoxBoxArchivePredictions.Count} archived predictions loaded.";
+
+    private void RebuildPredictionHistoryRows()
+    {
+        var rounds = BoxBoxHistory.Select(row => row.Round).Distinct().OrderBy(round => round).ToArray();
+        HistoryRounds.Clear();
+        HistoryRoundHeaders.Clear();
+        foreach (var round in rounds)
+        {
+            HistoryRounds.Add(round);
+            var circuit = BoxBoxHistory.FirstOrDefault(row => row.Round == round)?.CircuitId;
+            HistoryRoundHeaders.Add($"R{round} {FormatCircuit(circuit)}");
+        }
+        OnPropertyChanged(nameof(HistoryRoundHeaders));
+
+        DriverHistoryRows.Clear();
+        foreach (var row in PredictionHistoryMapper.Build(BoxBoxHistory, "Driver", rounds, BoxBoxArchivePredictions))
+        {
+            DriverHistoryRows.Add(row);
+        }
+
+        ConstructorHistoryRows.Clear();
+        foreach (var row in PredictionHistoryMapper.Build(BoxBoxHistory, "Constructor", rounds, BoxBoxArchivePredictions))
+        {
+            ConstructorHistoryRows.Add(row);
+        }
+    }
+
+    private static string FormatCircuit(string? circuitId) => circuitId?.ToLowerInvariant() switch
+    {
+        "albert_park" => "Melbourne",
+        "shanghai" => "Shanghai",
+        "suzuka" => "Suzuka",
+        "miami" => "Miami",
+        "villeneuve" => "Montreal",
+        "monaco" => "Monaco",
+        "catalunya" => "Barcelona",
+        "red_bull_ring" => "Austria",
+        "silverstone" => "Silverstone",
+        "spa" => "Spa",
+        "hungaroring" => "Budapest",
+        "zandvoort" => "Zandvoort",
+        "monza" => "Monza",
+        "madrid" => "Madrid",
+        "baku" => "Baku",
+        "sepang" => "Sepang",
+        "marina_bay" => "Singapore",
+        _ => circuitId ?? ""
+    };
 
     private void ApplyDataSet(FantasyDataSet dataSet, bool keepExistingSelections)
     {
@@ -839,6 +969,7 @@ public sealed class MainWindowViewModel : ObservableObject
         Recalculate();
         OnPropertyChanged(nameof(PointsSourceTitle));
         OnPropertyChanged(nameof(IsSimulationPointsAvailable));
+        OnPropertyChanged(nameof(IsBoxBoxSimulationPointsAvailable));
         OnPropertyChanged(nameof(IsAverageRacePointsAvailable));
         OnPropertyChanged(nameof(IsLastFiveRacePointsAvailable));
         OnPropertyChanged(nameof(CanTrimHistoricalOutliers));
@@ -1299,6 +1430,12 @@ public sealed class MainWindowViewModel : ObservableObject
             PointsSources.Add(SimulationPointsSource);
         }
 
+        // Keep the provider option visible even before a successful BoxBox refresh.
+        // Selecting it falls back to the built-in simulation until provider values
+        // have been imported, which makes the feature easy to verify in the UI.
+        PointsSources.Add(BoxBoxSimulationPointsSource);
+        PointsSources.Add(BoxBoxProjectedPointsSource);
+
         if (availableAssets.Any(asset => asset.AverageRacePoints is not null))
         {
             PointsSources.Add(SeasonAveragePointsSource);
@@ -1320,6 +1457,8 @@ public sealed class MainWindowViewModel : ObservableObject
         return PointsSources.FirstOrDefault(source => source == SeasonAveragePointsSource) ??
                PointsSources.FirstOrDefault(source => source == LastFivePointsSource) ??
                PointsSources.FirstOrDefault(source => source == SimulationPointsSource) ??
+               PointsSources.FirstOrDefault(source => source == BoxBoxSimulationPointsSource) ??
+               PointsSources.FirstOrDefault(source => source == BoxBoxProjectedPointsSource) ??
                SimulationPointsSource;
     }
 
@@ -1364,6 +1503,8 @@ public sealed class MainWindowViewModel : ObservableObject
         {
             SeasonAveragePointsSource => seasonAverage ?? lastFiveAverage ?? asset.SimulationExpectedPoints ?? asset.ExpectedPoints,
             LastFivePointsSource => lastFiveAverage ?? seasonAverage ?? asset.SimulationExpectedPoints ?? asset.ExpectedPoints,
+            BoxBoxSimulationPointsSource => asset.BoxBoxExpectedPoints ?? asset.SimulationExpectedPoints ?? seasonAverage ?? asset.ExpectedPoints,
+            BoxBoxProjectedPointsSource => asset.BoxBoxProjectedPoints ?? asset.BoxBoxExpectedPoints ?? asset.SimulationExpectedPoints ?? seasonAverage ?? asset.ExpectedPoints,
             _ => asset.SimulationExpectedPoints ?? seasonAverage ?? lastFiveAverage ?? asset.ExpectedPoints
         };
 
